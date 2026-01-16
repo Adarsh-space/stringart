@@ -46,41 +46,59 @@ async function loadModels(): Promise<void> {
   }
 }
 
-export async function detectFace(imageBuffer: Buffer, width: number, height: number): Promise<FaceBox | null> {
+export async function detectFace(imageBuffer: Buffer, targetWidth: number, targetHeight: number): Promise<FaceBox | null> {
   try {
     await loadModels();
 
     if (!modelsLoaded) {
-      return fallbackFaceDetection(width, height);
+      return fallbackFaceDetection(targetWidth, targetHeight);
     }
 
+    // NOTE: imageBuffer should already be the PREPROCESSED image (same crop/resize applied)
+    // This ensures face coordinates are directly in the target coordinate space
     const tensor = tf.node.decodeImage(imageBuffer, 3);
+    const tensorShape = tensor.shape;
+    const detectedHeight = tensorShape[0] as number;
+    const detectedWidth = tensorShape[1] as number;
+    
+    console.log(`Face detection on ${detectedWidth}x${detectedHeight} image (target: ${targetWidth}x${targetHeight})`);
+    
     const detection = await faceapi.detectSingleFace(tensor as any).withFaceLandmarks();
     tensor.dispose();
 
     if (!detection) {
-      return fallbackFaceDetection(width, height);
+      console.log('No face detected, using fallback');
+      return fallbackFaceDetection(targetWidth, targetHeight);
     }
 
     const box = detection.detection.box;
     const landmarks = detection.landmarks;
 
-    return {
-      x: box.x,
-      y: box.y,
-      width: box.width,
-      height: box.height,
+    // If image dimensions match target, no scaling needed (coordinates already correct)
+    // If they differ slightly (due to PNG encoding), scale proportionally
+    const scaleX = targetWidth / detectedWidth;
+    const scaleY = targetHeight / detectedHeight;
+    
+    console.log(`Face box: (${Math.round(box.x * scaleX)}, ${Math.round(box.y * scaleY)}) ${Math.round(box.width * scaleX)}x${Math.round(box.height * scaleY)}`);
+
+    const faceBoxResult: FaceBox = {
+      x: box.x * scaleX,
+      y: box.y * scaleY,
+      width: box.width * scaleX,
+      height: box.height * scaleY,
       landmarks: {
-        leftEye: landmarks.getLeftEye()[0],
-        rightEye: landmarks.getRightEye()[0],
-        nose: landmarks.getNose()[3],
-        leftMouth: landmarks.getMouth()[0],
-        rightMouth: landmarks.getMouth()[6],
+        leftEye: { x: landmarks.getLeftEye()[0].x * scaleX, y: landmarks.getLeftEye()[0].y * scaleY },
+        rightEye: { x: landmarks.getRightEye()[0].x * scaleX, y: landmarks.getRightEye()[0].y * scaleY },
+        nose: { x: landmarks.getNose()[3].x * scaleX, y: landmarks.getNose()[3].y * scaleY },
+        leftMouth: { x: landmarks.getMouth()[0].x * scaleX, y: landmarks.getMouth()[0].y * scaleY },
+        rightMouth: { x: landmarks.getMouth()[6].x * scaleX, y: landmarks.getMouth()[6].y * scaleY },
       }
     };
+
+    return faceBoxResult;
   } catch (error) {
     console.log('Face detection failed, using fallback:', error);
-    return fallbackFaceDetection(width, height);
+    return fallbackFaceDetection(targetWidth, targetHeight);
   }
 }
 
@@ -111,18 +129,21 @@ export function createFaceRegionMask(
     return { faceBox: null, faceMask, bodyMask, width, height };
   }
 
+  // TIGHTER face expansion - only 1.1x to focus on actual facial features
+  // This prevents threads from criss-crossing the entire head area
   const expandedBox = {
-    x: Math.max(0, faceBox.x - faceBox.width * 0.2),
-    y: Math.max(0, faceBox.y - faceBox.height * 0.2),
-    width: faceBox.width * 1.4,
-    height: faceBox.height * 1.4,
+    x: Math.max(0, faceBox.x - faceBox.width * 0.05),
+    y: Math.max(0, faceBox.y - faceBox.height * 0.05),
+    width: faceBox.width * 1.1,
+    height: faceBox.height * 1.1,
   };
 
+  // Body box is more conservative - just below/around face
   const bodyBox = {
-    x: Math.max(0, faceBox.x - faceBox.width * 0.8),
-    y: Math.max(0, faceBox.y - faceBox.height * 0.3),
-    width: faceBox.width * 2.6,
-    height: faceBox.height * 2.5,
+    x: Math.max(0, faceBox.x - faceBox.width * 0.3),
+    y: Math.max(0, faceBox.y - faceBox.height * 0.1),
+    width: faceBox.width * 1.6,
+    height: faceBox.height * 2.0,
   };
 
   for (let y = 0; y < height; y++) {
@@ -142,6 +163,15 @@ export function createFaceRegionMask(
   }
 
   return { faceBox, faceMask, bodyMask, width, height };
+}
+
+// Get face overdraw threshold - balance between preventing muddy accumulation and allowing enough detail
+export function getFaceOverdrawThreshold(region: 'face' | 'body' | 'background'): number {
+  switch (region) {
+    case 'face': return 0.80;    // Raised to 0.80 to allow more face detail before throttling
+    case 'body': return 0.80;
+    case 'background': return 0.90;
+  }
 }
 
 export function getRegionForPixel(

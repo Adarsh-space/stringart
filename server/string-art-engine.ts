@@ -1,7 +1,7 @@
 import { type GenerationParams, type Pin, type ThreadConnection, type StringArtResult, type ThreadColorSummary, type AccuracyMetrics } from "@shared/schema";
 import { randomUUID } from "crypto";
 import sharp from "sharp";
-import { detectFace, createFaceRegionMask, getRegionForPixel, getMinPinSkipForRegion, getEffectiveMinSkip, isLineInFaceRegion, getLineFaceOverlap, type FaceBox, type FaceRegionMask } from "./face-detection";
+import { detectFace, createFaceRegionMask, getRegionForPixel, getMinPinSkipForRegion, getEffectiveMinSkip, isLineInFaceRegion, getLineFaceOverlap, getFaceOverdrawThreshold, type FaceBox, type FaceRegionMask } from "./face-detection";
 
 // Export helper functions for SVG and PDF generation
 export function generateSVG(result: StringArtResult): string {
@@ -250,19 +250,33 @@ export class StringArtEngine {
     const imageData = await this.preprocessImage(imageDataUrl);
 
     // Step 1.5: Detect face in image for face-focused optimization
+    // CRITICAL: Run face detection on the PREPROCESSED image buffer (same crop/resize applied)
+    // This ensures face coordinates match the preprocessed image exactly
     onProgress(0, this.params.maxThreads, "Detecting face...");
     let faceBox: FaceBox | null = null;
     let faceRegionMask: FaceRegionMask | undefined;
     try {
-      const base64Data = imageDataUrl.replace(/^data:image\/\w+;base64,/, '');
-      const imageBuffer = Buffer.from(base64Data, 'base64');
-      faceBox = await detectFace(imageBuffer, imageData.width, imageData.height);
+      // Get preprocessed image buffer (with crop/resize applied) for face detection
+      const preprocessedBuffer = await this.getPreprocessedImageBuffer(imageDataUrl, imageData.width, imageData.height);
+      console.log(`[FACE DEBUG] Preprocessed buffer size: ${preprocessedBuffer.length} bytes for ${imageData.width}x${imageData.height} image`);
+      
+      faceBox = await detectFace(preprocessedBuffer, imageData.width, imageData.height);
       if (faceBox) {
         faceRegionMask = createFaceRegionMask(faceBox, imageData.width, imageData.height);
-        console.log(`Face detected at (${Math.round(faceBox.x)}, ${Math.round(faceBox.y)}) size ${Math.round(faceBox.width)}x${Math.round(faceBox.height)}`);
+        
+        // Count how many pixels are in face mask
+        const faceMaskCount = faceRegionMask.faceMask.filter(Boolean).length;
+        const totalPixels = imageData.width * imageData.height;
+        const facePercentage = (faceMaskCount / totalPixels * 100).toFixed(1);
+        
+        console.log(`[FACE DEBUG] Face detected at (${Math.round(faceBox.x)}, ${Math.round(faceBox.y)}) size ${Math.round(faceBox.width)}x${Math.round(faceBox.height)}`);
+        console.log(`[FACE DEBUG] Face mask covers ${faceMaskCount} pixels (${facePercentage}% of ${totalPixels} total)`);
+        console.log(`[FACE DEBUG] Face center: (${Math.round(faceBox.x + faceBox.width/2)}, ${Math.round(faceBox.y + faceBox.height/2)}) vs image center (${imageData.width/2}, ${imageData.height/2})`);
+      } else {
+        console.log('[FACE DEBUG] No face detected - using fallback');
       }
     } catch (error) {
-      console.log('Face detection skipped:', error);
+      console.log('[FACE DEBUG] Face detection error:', error);
     }
 
     // Step 2: Generate pins (with face-aware distribution if face detected)
@@ -1338,20 +1352,23 @@ export class StringArtEngine {
     // Final score: weighted combination
     let score = (0.65 * colorAccuracyScore + 0.20 * edgeScore - 0.10 * overdrawPenalty - 0.05 * colorImbalance) * pinFatigue;
     
-    // Face region priority boost (2x edge weight for lines through face)
+    // Face region priority boost - use ANY face overlap (not just 30%+)
+    // CRITICAL FIX: Boost the OVERALL score, not just edge score
+    // This ensures face regions without strong edges still get prioritized
     if (this.state.faceRegionMask) {
       const faceOverlap = getLineFaceOverlap(linePixels, this.state.faceRegionMask);
-      if (faceOverlap > 0.3) {
-        // Line passes through face - boost score
-        score += edgeScore * faceOverlap * 2.0;
+      if (faceOverlap > 0.01) {
+        // CRITICAL: Add a FIXED boost proportional to face overlap
+        // This doesn't depend on edge detection, so smooth face areas still get priority
+        const baseFaceBoost = 0.5 * faceOverlap; // Unconditional face bonus
+        const edgeFaceBoost = edgeScore * faceOverlap * 3.0; // Extra for edge lines
+        score += baseFaceBoost + edgeFaceBoost;
         
-        // Check overdraw in face region specifically (stricter: 0.85 density limit)
-        // Use densityImage for consistent metric with monochrome mode
+        // Check overdraw in face region - softer penalty
         let faceDensitySum = 0;
         let facePixelCount = 0;
         for (const idx of linePixels) {
           if (this.state.faceRegionMask.faceMask[idx]) {
-            // Use densityImage (0-1 range) for consistent overdraw metric
             const density = this.state.densityImage ? this.state.densityImage[idx] || 0 : 0;
             faceDensitySum += density;
             facePixelCount++;
@@ -1359,8 +1376,10 @@ export class StringArtEngine {
         }
         if (facePixelCount > 0) {
           const avgFaceDensity = faceDensitySum / facePixelCount;
-          if (avgFaceDensity > 0.85) { // Same 0.85 threshold as monochrome
-            score *= 0.3; // Heavily penalize overdraw in face
+          const faceThreshold = getFaceOverdrawThreshold('face');
+          if (avgFaceDensity > faceThreshold) {
+            // Softer overdraw penalty - don't block completely
+            score *= Math.max(0.3, 1.0 - (avgFaceDensity - faceThreshold) * 2);
           }
         }
       }
@@ -1653,9 +1672,10 @@ export class StringArtEngine {
       // Get adaptive min skip for face-aware candidate selection (monochrome)
       const currentPinCoord = this.state.pins[this.state.currentPin];
       let adaptiveMinSkip = minPinSkip;
+      let currentRegionType: 'face' | 'body' | 'background' = 'background';
       if (this.state.faceRegionMask && currentPinCoord) {
-        const currentRegion = getRegionForPixel(Math.floor(currentPinCoord.x), Math.floor(currentPinCoord.y), this.state.faceRegionMask);
-        adaptiveMinSkip = Math.min(minPinSkip, getMinPinSkipForRegion(currentRegion));
+        currentRegionType = getRegionForPixel(Math.floor(currentPinCoord.x), Math.floor(currentPinCoord.y), this.state.faceRegionMask);
+        adaptiveMinSkip = Math.min(minPinSkip, getMinPinSkipForRegion(currentRegionType));
       }
 
       if (useEdgeGuidedProposals) {
@@ -1674,10 +1694,10 @@ export class StringArtEngine {
             // Use adaptive skip for each candidate based on its region
             // Face allows smaller skip, body/background use larger skips
             const candidatePinCoord = this.state.pins[i];
-            let effectiveMinSkip = currentRegionSkip;
+            let effectiveMinSkip = adaptiveMinSkip;
             if (this.state.faceRegionMask && candidatePinCoord && currentPinCoord) {
               const candidateRegion = getRegionForPixel(Math.floor(candidatePinCoord.x), Math.floor(candidatePinCoord.y), this.state.faceRegionMask);
-              effectiveMinSkip = getEffectiveMinSkip(currentRegion, candidateRegion, this.params.qualityPreset);
+              effectiveMinSkip = getEffectiveMinSkip(currentRegionType, candidateRegion, this.params.qualityPreset);
             }
             
             if (Math.min(dist, wrapDist) >= effectiveMinSkip) {
@@ -1704,10 +1724,10 @@ export class StringArtEngine {
           // Use adaptive skip for each candidate based on its region
           // Face allows smaller skip, body/background use larger skips
           const candidatePinCoord = this.state.pins[i];
-          let effectiveMinSkip = currentRegionSkip;
+          let effectiveMinSkip = adaptiveMinSkip;
           if (this.state.faceRegionMask && candidatePinCoord && currentPinCoord) {
             const candidateRegion = getRegionForPixel(Math.floor(candidatePinCoord.x), Math.floor(candidatePinCoord.y), this.state.faceRegionMask);
-            effectiveMinSkip = getEffectiveMinSkip(currentRegion, candidateRegion, this.params.qualityPreset);
+            effectiveMinSkip = getEffectiveMinSkip(currentRegionType, candidateRegion, this.params.qualityPreset);
           }
           
           if (Math.min(dist, wrapDist) >= effectiveMinSkip) {
@@ -2141,14 +2161,19 @@ export class StringArtEngine {
     // 0.40 SSIM + 0.25 MSE + 0.20 Edge + 0.10 Smoothness + 0.05 Overdraw
     let score = ssimScore * 0.40 + mseScore * 0.25 + edgeScore * 0.20 + smoothScore * 0.10 + overdrawScore * 0.05;
 
-    // Face region priority boost (2x edge weight for lines through face)
+    // Face region priority boost - use ANY face overlap
+    // CRITICAL FIX: Boost the OVERALL score, not just edge score
+    // This ensures face regions without strong edges still get prioritized
     if (this.state.faceRegionMask) {
       const faceOverlap = getLineFaceOverlap(pixels, this.state.faceRegionMask);
-      if (faceOverlap > 0.3) {
-        // Line passes through face - boost edge score 2x and add face priority
-        score += edgeScore * faceOverlap * 2.0;
+      if (faceOverlap > 0.01) {
+        // CRITICAL: Add a FIXED boost proportional to face overlap
+        // This doesn't depend on edge detection, so smooth face areas still get priority
+        const baseFaceBoost = 1.0 * faceOverlap; // Unconditional face bonus (higher for monochrome)
+        const edgeFaceBoost = edgeScore * faceOverlap * 3.0; // Extra for edge lines
+        score += baseFaceBoost + edgeFaceBoost;
         
-        // Check overdraw in face region specifically (stricter: 0.85 density limit)
+        // Check overdraw in face region - softer penalty
         let faceDensity = 0;
         let facePixelCount = 0;
         for (const idx of pixels) {
@@ -2159,8 +2184,10 @@ export class StringArtEngine {
         }
         if (facePixelCount > 0) {
           const avgFaceDensity = faceDensity / facePixelCount;
-          if (avgFaceDensity > 0.85) {
-            score *= 0.3; // Heavily penalize overdraw in face
+          const faceThreshold = getFaceOverdrawThreshold('face');
+          if (avgFaceDensity > faceThreshold) {
+            // Softer overdraw penalty - don't block completely
+            score *= Math.max(0.3, 1.0 - (avgFaceDensity - faceThreshold) * 2);
           }
         }
       }
@@ -2634,34 +2661,54 @@ export class StringArtEngine {
     const faceRegionMask = this.state.faceRegionMask;
     const pins = this.state.pins;
     const pinCount = pins.length;
+    const width = faceRegionMask.width;
     
-    // Add 1500-2000 extra threads focused on face
-    const extraFaceThreads = Math.min(2000, Math.floor(this.params.maxThreads * 0.2));
-    const faceThreadOpacity = this.params.threadOpacity * 0.9; // Slightly thinner for face detail
-    const faceMinPinSkip = Math.max(1, Math.floor(this.params.minPinSkip / 2)); // Smaller skip for face
+    // Add extra threads focused on face - proportional to face size
+    // Increase face threads to 20% of total with higher cap for better facial detail
+    const extraFaceThreads = Math.min(2500, Math.floor(this.params.maxThreads * 0.20));
+    const faceThreadOpacity = this.params.threadOpacity * 0.7; // Much thinner for fine face detail (eyes, lips)
+    const faceMinPinSkip = 1; // Allow very close pins for fine facial details
     
-    console.log(`Running face refinement: ${extraFaceThreads} extra threads for face region`);
+    console.log(`[FACE DEBUG] Running face refinement: ${extraFaceThreads} extra threads for face region`);
     
-    // Find pins that are near the face region
+    // Find pins that are STRICTLY near face edges (not entire head area)
     const facePins: number[] = [];
     const faceCenterX = faceBox.x + faceBox.width / 2;
     const faceCenterY = faceBox.y + faceBox.height / 2;
-    const faceRadius = Math.max(faceBox.width, faceBox.height) * 0.75;
+    // Use smaller radius - just around actual face box
+    const faceRadius = Math.max(faceBox.width, faceBox.height) * 0.6;
     
     for (let i = 0; i < pinCount; i++) {
       const pin = pins[i];
       const dx = pin.x - faceCenterX;
       const dy = pin.y - faceCenterY;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < faceRadius * 1.5) {
+      // Only pins very close to face perimeter
+      if (dist >= faceRadius * 0.8 && dist <= faceRadius * 1.3) {
         facePins.push(i);
       }
     }
     
     if (facePins.length < 10) {
-      console.log('Not enough pins near face for refinement');
+      console.log('Not enough pins near face for refinement, using fallback');
+      // Fallback: use all pins within 2x face radius
+      for (let i = 0; i < pinCount; i++) {
+        const pin = pins[i];
+        const dx = pin.x - faceCenterX;
+        const dy = pin.y - faceCenterY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < faceRadius * 2) {
+          facePins.push(i);
+        }
+      }
+    }
+    
+    if (facePins.length < 5) {
+      console.log('[FACE DEBUG] Still not enough pins near face for refinement');
       return;
     }
+    
+    console.log(`[FACE DEBUG] Face pins count: ${facePins.length}, min skip: ${faceMinPinSkip}, opacity: ${faceThreadOpacity.toFixed(3)}`);
     
     const useColorMode = this.params.colorMode === "color" && this.state.colorProgressImage;
     const previewInterval = Math.max(1, Math.floor(extraFaceThreads / 20));
@@ -2677,13 +2724,56 @@ export class StringArtEngine {
       }
     }
     
+    // Helper: calculate face overlap percentage for a line
+    const calculateFaceOverlap = (fromPin: number, toPin: number): number => {
+      const p0 = pins[fromPin];
+      const p1 = pins[toPin];
+      const sampleCount = 10;
+      let faceCount = 0;
+      
+      for (let s = 0; s <= sampleCount; s++) {
+        const t = s / sampleCount;
+        const sx = Math.floor(p0.x + (p1.x - p0.x) * t);
+        const sy = Math.floor(p0.y + (p1.y - p0.y) * t);
+        const idx = sy * width + sx;
+        if (faceRegionMask.faceMask[idx]) faceCount++;
+      }
+      
+      return faceCount / (sampleCount + 1);
+    };
+    
+    // Helper: get average density along line (for overdraw control)
+    const getAverageLineDensity = (fromPin: number, toPin: number): number => {
+      const p0 = pins[fromPin];
+      const p1 = pins[toPin];
+      const sampleCount = 5;
+      let totalDensity = 0;
+      
+      for (let s = 0; s <= sampleCount; s++) {
+        const t = s / sampleCount;
+        const sx = Math.floor(p0.x + (p1.x - p0.x) * t);
+        const sy = Math.floor(p0.y + (p1.y - p0.y) * t);
+        const idx = sy * width + sx;
+        if (this.state!.densityImage[idx] !== undefined) {
+          totalDensity += this.state!.densityImage[idx];
+        }
+      }
+      return totalDensity / (sampleCount + 1);
+    };
+    
+    // Use centralized face overdraw threshold
+    const faceOverdrawThreshold = getFaceOverdrawThreshold('face');
+    
+    let addedThreads = 0;
+    
     for (let t = 0; t < extraFaceThreads && !this.cancelled; t++) {
       let bestPin = -1;
       let bestScore = -Infinity;
       let bestColor = this.THREAD_COLOR_PALETTE[0];
       
-      // Use current pin or pick a random face-adjacent pin
-      const startPin: number = this.state.currentPin;
+      // Pick a random face-adjacent pin as starting point for variety
+      const startPinIdx = Math.floor(Math.random() * facePins.length);
+      const startPin = facePins[startPinIdx];
       
       // Generate candidates from face-adjacent pins
       for (const candidatePin of facePins) {
@@ -2693,26 +2783,30 @@ export class StringArtEngine {
         const wrapDist = pinCount - dist;
         if (Math.min(dist, wrapDist) < faceMinPinSkip) continue;
         
-        // Check if line passes through face
         const startPinCoord = pins[startPin];
         const endPinCoord = pins[candidatePin];
         if (!startPinCoord || !endPinCoord) continue;
         
-        const midX: number = (startPinCoord.x + endPinCoord.x) / 2;
-        const midY: number = (startPinCoord.y + endPinCoord.y) / 2;
-        const midIdx = Math.floor(midY) * faceRegionMask.width + Math.floor(midX);
+        // Calculate face overlap - use as WEIGHTED BOOST, not hard cutoff
+        // No minimum cutoff - even 1% overlap helps capture thin features (eyes, lips)
+        const faceOverlap = calculateFaceOverlap(startPin, candidatePin);
+        // Very low threshold: include lines that even slightly touch face
+        if (faceOverlap < 0.01) continue;
         
-        // Prefer lines that pass through face
-        if (!faceRegionMask.faceMask[midIdx]) continue;
+        // Check overdraw but use it as penalty, not hard rejection
+        const avgDensity = getAverageLineDensity(startPin, candidatePin);
+        const overdrawPenalty = avgDensity > faceOverdrawThreshold ? 0.3 : 1.0;
         
         if (useColorMode && targetLab) {
           // For color mode, use proper v4.2 interleaved scoring with LAB Delta E
           for (const colorOption of this.THREAD_COLOR_PALETTE) {
-            // Use the proper color scoring with Delta E
             let colorScore = this.evaluateColoredLine(startPin, candidatePin, colorOption, faceThreadOpacity, targetLab);
             
-            // Additional boost for face lines (1.5x)
-            colorScore *= 1.5;
+            // CRITICAL: Add unconditional face baseline + boost
+            // This ensures face refinement always adds threads even when perceptual score is negative
+            const faceBaseline = 10.0 * faceOverlap; // Guaranteed positive contribution
+            colorScore = colorScore + faceBaseline;
+            colorScore *= overdrawPenalty;
             
             if (colorScore > bestScore) {
               bestScore = colorScore;
@@ -2723,7 +2817,13 @@ export class StringArtEngine {
         } else {
           // Monochrome mode - use perceptual scoring with face boost
           let score = this.calculatePerceptualLineScore(startPin, candidatePin);
-          score *= 1.5; // Face boost
+          
+          // CRITICAL: Add unconditional face baseline + boost
+          // This ensures face refinement always adds threads even when perceptual score is negative
+          const faceBaseline = 10.0 * faceOverlap; // Guaranteed positive contribution
+          score = score + faceBaseline;
+          score *= overdrawPenalty;
+          
           if (score > bestScore) {
             bestScore = score;
             bestPin = candidatePin;
@@ -2731,7 +2831,8 @@ export class StringArtEngine {
         }
       }
       
-      // Apply the best face line
+      // Apply the best face line - CRITICAL: removed bestScore > 0 check
+      // Face refinement should ALWAYS add threads; the face baseline ensures best candidates are valid
       if (bestPin !== -1) {
         if (useColorMode) {
           this.applyColoredLine(startPin, bestPin, bestColor, faceThreadOpacity);
@@ -2751,6 +2852,7 @@ export class StringArtEngine {
         }
         this.state.pinUsageCount[bestPin]++;
         this.state.currentPin = bestPin;
+        addedThreads++;
       }
       
       // Progress update
@@ -2762,7 +2864,7 @@ export class StringArtEngine {
         onProgress(
           this.state.connections.length,
           this.params.maxThreads + extraFaceThreads,
-          `Face detail: ${t + 1}/${extraFaceThreads}`,
+          `Face detail: ${addedThreads}/${extraFaceThreads}`,
           previewData
         );
       }
@@ -2770,7 +2872,7 @@ export class StringArtEngine {
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     
-    console.log(`Face refinement complete: added ${extraFaceThreads} face threads`);
+    console.log(`[FACE DEBUG] Face refinement complete: added ${addedThreads} face threads (target: ${extraFaceThreads})`);
   }
 
   // ============================================================
@@ -3205,6 +3307,55 @@ export class StringArtEngine {
       }
 
       return { width: targetWidth, height: targetHeight, data };
+    }
+  }
+
+  // Get preprocessed image buffer for face detection (RGB, with same crop/resize applied)
+  private async getPreprocessedImageBuffer(dataUrl: string, targetWidth: number, targetHeight: number): Promise<Buffer> {
+    const base64Data = dataUrl.split(",")[1];
+    const inputBuffer = Buffer.from(base64Data, "base64");
+    
+    // Get crop parameters (same as preprocessImage)
+    const crop = this.params.imageCrop || { scale: 1, offsetX: 0, offsetY: 0 };
+
+    try {
+      const metadata = await sharp(inputBuffer).metadata();
+      const imgWidth = metadata.width || targetWidth;
+      const imgHeight = metadata.height || targetHeight;
+      
+      // Calculate crop region (same logic as preprocessImage)
+      const cropSize = Math.min(imgWidth, imgHeight) / crop.scale;
+      const maxOffsetX = (imgWidth - cropSize) / 2;
+      const maxOffsetY = (imgHeight - cropSize) / 2;
+      const left = Math.round(maxOffsetX + crop.offsetX * maxOffsetX);
+      const top = Math.round(maxOffsetY + crop.offsetY * maxOffsetY);
+      
+      let pipeline = sharp(inputBuffer);
+      
+      // Apply crop if scale > 1 (same logic as preprocessImage)
+      if (crop.scale > 1) {
+        pipeline = pipeline.extract({
+          left: Math.max(0, left),
+          top: Math.max(0, top),
+          width: Math.round(Math.min(cropSize, imgWidth)),
+          height: Math.round(Math.min(cropSize, imgHeight)),
+        });
+      }
+      
+      // Resize to target size and output as PNG buffer for face detection
+      // IMPORTANT: Keep RGB (no grayscale) for face-api.js
+      return await pipeline
+        .resize(targetWidth, targetHeight, {
+          fit: "cover",
+          position: "center",
+        })
+        .removeAlpha()
+        .png()
+        .toBuffer();
+    } catch (error) {
+      console.error("Failed to get preprocessed buffer for face detection:", error);
+      // Return original buffer as fallback
+      return inputBuffer;
     }
   }
 

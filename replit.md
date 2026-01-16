@@ -158,10 +158,30 @@ A professional-grade string art generation application that converts images into
   - **Face Detection**: Uses @vladmandic/face-api with TensorFlow.js to detect faces in uploaded images
   - **Non-Uniform Pin Distribution**: 1.4× more pins packed around face region perimeter
   - **Face Region Mask**: Creates face/body/background zones for differential scoring
-  - **Adaptive Pin Gap**: Face=1-2, Body=4, Background=6-8 (smaller gaps = more detail)
+  - **Adaptive Pin Gap**: Face=2, Body=4, Background=6-8 (quality-dependent: high=6, balanced=7, fast=8)
   - **Edge Priority Boost**: 2× edge weight for lines passing through face (>30% overlap)
-  - **Face Overdraw Control**: Penalizes threads in face region when density >0.85
-  - **Face Refinement Pass**: +1500-2000 extra threads focused exclusively on face region
-  - **Thinner Face Threads**: 0.9× thread opacity for finer face details
+  - **Face Overdraw Control**: Penalizes threads in face region when density >0.60 (centralized threshold)
+  - **Face Refinement Pass**: +1500 extra threads with weighted overlap scoring (30% minimum overlap)
+  - **Thinner Face Threads**: 0.85× thread opacity for finer face details
   - **Fallback Detection**: Uses center-positioned estimated face box if detection fails
   - Expected: Sharp eyes, nose, mouth, jawline with ~90-95% face clarity
+- **Face Optimization v5.1 Fixes (2026-01-16)** - Addressing muddy face rendering:
+  - **Tighter Face Mask**: Reduced expansion from 1.4× to 1.1× to focus on actual facial features
+  - **Lower Face Overdraw Threshold**: Changed from 0.85 to 0.60 to prevent muddy accumulation
+  - **Centralized Thresholds**: getFaceOverdrawThreshold() function for consistent region-specific limits
+  - **Relaxed Face Refinement**: Uses weighted overlap scoring instead of hard 60% cutoff
+  - **Overdraw as Penalty**: Soft penalty (0.3×) instead of hard rejection when face is overdrawn
+- **Face Optimization v5.2 Critical Fix (2026-01-16)** - Fixing blank face issue:
+  - **CRITICAL: Run face detection on PREPROCESSED image**: Face detection now runs on the same cropped/resized image used for generation
+  - Previously, face detection ran on original image but mask was applied to preprocessed 512x512, causing complete coordinate mismatch
+  - Added getPreprocessedImageBuffer() method to apply same crop/resize as preprocessImage but keep RGB for face-api.js
+  - Coordinates now match exactly because detection runs on the same image that generation uses
+  - **Raised Face Overdraw Threshold**: Increased from 0.60 to 0.70 to allow more face detail before throttling
+- **Face Optimization v5.3 Tuning (2026-01-16)** - Improving thin feature rendering (eyes, lips, nose):
+  - **Lowered face overlap threshold**: 0.30 → 0.05 (5%) in scoring functions to include lines that partially touch face
+  - **Face refinement overlap**: 0.30 → 0.01 (1%) to capture thin features like eye lines and lip contours
+  - **Increased face edge boost**: 2x → 5x multiplier for lines through face region
+  - **More face refinement threads**: 1500 → 2500 threads (15% → 20% of total)
+  - **Thinner face threads**: 0.85x → 0.7x thread opacity for finer facial detail
+  - **Higher overdraw threshold**: 0.70 → 0.80 to allow more face contrast before throttling
+  - Expected: Clearer eyes, nose, lips, and jawline definition

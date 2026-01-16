@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Circle, Square, RectangleHorizontal, ChevronDown, Settings2, Palette, Zap, Gauge, Move, ZoomIn, RotateCcw, Wand2 } from "lucide-react";
+import { Circle, Square, RectangleHorizontal, ChevronDown, Settings2, Palette, Zap, Gauge, Move, ZoomIn, RotateCcw, Wand2, Grid3X3, Ruler } from "lucide-react";
 import { type GenerationParams, type FrameType, type ColorMode, type QualityPreset } from "@shared/schema";
 
 interface ParameterControlsProps {
@@ -89,6 +89,32 @@ export function ParameterControls({ params, onChange, onAutoOptimize }: Paramete
             <span className="text-xs">Rect</span>
           </Label>
         </RadioGroup>
+      </div>
+
+      {/* Canvas Size & Pin Gap Info */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-md bg-muted flex items-center justify-center">
+            <Grid3X3 className="w-4 h-4 text-muted-foreground" />
+          </div>
+          <Label className="text-sm font-medium">Generation Info</Label>
+        </div>
+        <div className="grid grid-cols-2 gap-3 pl-2">
+          <div className="p-3 rounded-md border bg-muted/30">
+            <div className="flex items-center gap-1.5 mb-1">
+              <Ruler className="w-3 h-3 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Canvas Size</span>
+            </div>
+            <span className="font-mono text-sm font-medium" data-testid="text-canvas-size">512 × 512 px</span>
+          </div>
+          <div className="p-3 rounded-md border bg-muted/30">
+            <div className="flex items-center gap-1.5 mb-1">
+              <Circle className="w-3 h-3 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Pin Gap</span>
+            </div>
+            <span className="font-mono text-sm font-medium" data-testid="text-pin-gap">{params.minPinSkip} pins</span>
+          </div>
+        </div>
       </div>
 
       {/* Image Position & Zoom */}
