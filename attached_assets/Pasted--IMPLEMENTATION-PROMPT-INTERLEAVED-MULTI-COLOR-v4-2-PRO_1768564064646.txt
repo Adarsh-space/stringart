@@ -1,0 +1,225 @@
+✅ IMPLEMENTATION PROMPT — INTERLEAVED MULTI-COLOR (v4.2)
+PROJECT GOAL
+
+Upgrade the string art generator so that it produces clean, realistic multi-color threads using an interleaved color strategy, instead of messy layer-by-layer coloring.
+
+This change must integrate with all existing v4.0 features (multi-resolution, edge-guided candidates, adaptive pin gaps, and staged refinement).
+
+1. CURRENT PROBLEM (WHAT IS WRONG)
+
+The system currently:
+
+Optimizes one color at a time (layer-by-layer)
+
+Builds all Red → then all Green → then all Blue
+
+Uses separate density maps per color
+
+This causes:
+
+Color fighting and overdraw
+
+Muddy or chaotic results
+
+Broken edges
+
+Loss of structure
+
+Visually “messy” images
+
+Many black-looking or dominant colors
+
+Poor perceptual accuracy (~70–80%)
+
+Root cause:
+Each color is optimized blind to the others, so later layers destroy earlier ones.
+
+2. REQUIRED CHANGE — INTERLEAVED COLOR STRATEGY
+
+Replace layer-by-layer coloring with single shared canvas + interleaved color selection.
+
+New core principle:
+
+Instead of:
+
+All Red → All Green → All Blue   ❌
+
+
+Do this:
+
+R → G → B → R → G → B → R → G …  ✅
+
+
+That is, choose the best color for every single thread, one at a time.
+
+3. NEW DATA STRUCTURE (CRITICAL)
+
+Use ONE shared density canvas, not separate ones:
+
+density_canvas = np.zeros((H, W, 3))   # RGB density
+
+
+No per-color full canvases. All colors accumulate here together.
+
+4. NEW LINE SELECTION RULE (CORE ALGORITHM)
+
+At each iteration:
+
+Generate candidate pin pairs (as before).
+
+For each candidate pin pair, test each available color (R, G, B or C, M, Y).
+
+For each (pinA → pinB, color C):
+
+Simulate drawing that color on the same shared canvas
+
+Compute total score:
+
+score =
+  0.7 × Color accuracy (Lab ΔE)
++ 0.2 × Edge preservation
++ 0.1 × Overdraw penalty
+
+
+Pick the single best (color + line) across ALL colors and ALL candidates.
+
+Commit that colored line to the shared canvas.
+
+Repeat.
+
+This makes colors cooperate instead of compete.
+
+5. STAGE-BASED CONTROL (KEEP YOUR PIPELINE)
+
+Keep your 3-stage system but make it color-interleaved:
+
+Stage 1 — Structure (25%)
+
+Mostly dark threads
+
+Large pin gaps (≈ pins/6)
+
+Higher opacity (12–15%)
+
+Stage 2 — Mid Detail (35%)
+
+Mix colors freely
+
+Medium gaps (pins/12–15)
+
+Medium opacity (9–11%)
+
+Stage 3 — Fine Detail (40%)
+
+All colors allowed
+
+Small gaps (2–5 pins)
+
+Lower opacity (7–9%)
+
+6. CANDIDATE GENERATION (EDGE-GUIDED + COLOR)
+
+For each step, build candidates like this:
+
+35 edge-aligned candidates
+
+15 random candidates
+
+For EACH candidate, test all allowed colors
+
+This prevents color bias and preserves structure.
+
+7. COMPOSITING RULE
+
+When drawing a line of color C onto the canvas:
+
+new_density = old_density + opacity * (1 - old_density)
+
+
+Do this per RGB channel of that color only.
+
+This prevents over-darkening and keeps blending realistic.
+
+8. STEP-BY-STEP UI BEHAVIOR
+
+When showing instructions to the user:
+
+Show:
+
+Thread #X  
+Color: RED  
+Pin 12 → Pin 87  
+
+
+Auto-pause when color changes
+
+Highlight current thread in its color
+
+Keep Play / Pause / Next / Prev controls
+
+9. EXPECTED RESULT
+
+Compared to your previous version:
+
+Method	Expected Accuracy
+Layer-by-layer	70–85% ❌
+Your old system	~73%
+Interleaved color (this method)	90–97% ✅
+
+You should see:
+
+Cleaner edges
+
+Natural color blending
+
+Less mess
+
+Better structure
+
+No “all black” threads
+
+More realistic string art look
+
+10. WHAT YOU MUST REMOVE
+
+Remove or disable:
+
+Separate full canvases per color
+
+“Finish red first” logic
+
+Strict color sequencing
+
+Per-layer independent optimization
+
+11. WHAT YOU MUST KEEP
+
+Keep:
+
+Multi-resolution evaluation
+
+Edge-guided candidates
+
+Adaptive pin gaps
+
+Overdraw tracking
+
+Simulated annealing (optional)
+
+Local refinement
+
+Just change color handling to interleaved.
+
+12. SUCCESS CRITERIA
+
+Your implementation is correct when:
+
+Threads alternate colors naturally
+
+Final image is cleaner than before
+
+No single color dominates incorrectly
+
+Step-by-step view shows real mixed colors
+
+Visual accuracy visibly improves

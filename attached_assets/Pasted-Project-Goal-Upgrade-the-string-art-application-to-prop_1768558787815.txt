@@ -1,0 +1,87 @@
+Project Goal:
+Upgrade the string art application to properly generate multi-color thread art instead of only black threads while keeping all existing optimization improvements (v4.0, multi-stage, multi-resolution, edge-guided pipeline).
+
+Current Problem:
+
+The app converts images into a single density map (luminance-based).
+
+Optimization and rendering are applied without separating colors, so all threads appear black regardless of the original image.
+
+Users cannot create colored string art (red, green, blue, etc.) even if the input image is color.
+
+Required Solution:
+
+Separate Color Layers:
+
+For the input image, convert to a suitable color space (RGB or CMY).
+
+Maintain independent density maps/canvases per color channel.
+
+Example: density_R, density_G, density_B or density_C, density_M, density_Y.
+
+Per-Color Optimization:
+
+Run the entire thread placement algorithm (Greedy → Local Refinement → Simulated Annealing → Backtracking Cleanup) separately for each color channel.
+
+Each color channel should be optimized according to its density map.
+
+Respect stage-based settings (Stage 1 structure → Stage 3 fine detail) for each color.
+
+Composite Rendering:
+
+After optimizing all color layers, composite them with correct opacity to generate the final image.
+
+Use gamma-corrected blending to simulate realistic thread layering:
+
+final_density = 1 - (1 - density_C)*(1 - density_M)*(1 - density_Y)
+
+
+Each thread must be drawn with its color, not black.
+
+Step-by-Step Thread UI Updates:
+
+Highlight the current thread color in the UI.
+
+Pause or show prompts when the next thread requires a different color.
+
+Keep speed controls (1s/2s/3s/Manual) intact.
+
+Optional Enhancements (for max accuracy):
+
+Order colors by darkness/importance (dark channels first).
+
+Use adaptive opacity per channel to preserve subtle gradients.
+
+Maintain multi-resolution evaluation per color.
+
+Validation:
+
+Test with a color image (portrait with hair, skin, background).
+
+Expected behavior:
+
+Threads display correct colors.
+
+Step-by-step UI shows color instructions.
+
+Accuracy improves, matching v4.0 structure and target 93–97% for high preset.
+
+Deliverables / Instructions:
+
+Modify densityImage and overdrawMap to be per-color-channel.
+
+Modify thread placement engine to loop over color layers.
+
+Composite final image correctly using gamma-corrected blending.
+
+Update UI to reflect current thread color for step-by-step guidance.
+
+Keep all existing v4.0 improvements (multi-stage, multi-resolution, edge-guided candidates, adaptive pin gap, opacity control).
+
+Expected Result:
+
+Multi-color thread art correctly rendered, reflecting original image colors.
+
+Step-by-step guide shows thread colors and correct pin instructions.
+
+Achieves ~93–97% perceptual accuracy on high-quality images.

@@ -1,0 +1,29 @@
+High-Level Prompt (Issue + Improvement Statement)
+
+Problem Statement:
+
+The current string-art system achieves approximately 73% visual accuracy because, although it uses strong evaluation methods (SSIM, LAB + ΔE, Sobel edges, and gamma-corrected blending), the thread placement and rendering processes are not sufficiently structured, adaptive, or edge-aware. As a result, the optimizer has a good way to measure quality but an insufficiently powerful way to create quality. This leads to overdrawn regions, muddy overlaps, loss of structural detail, and suboptimal use of pins and threads.
+
+Core Insight:
+
+The limitation is not missing evaluation algorithms, but rather how existing optimization algorithms are applied and coordinated. Improving accuracy requires better guidance, better refinement, and better physical modeling of threads rather than adding arbitrary new algorithms.
+
+Improvement Strategy:
+
+To move from ~73% to 85–92%+ accuracy, the system should:
+
+Make the Greedy algorithm edge-guided, prioritizing thread placements that align with strong Sobel edges instead of testing random or uniform pin pairs.
+
+Strengthen Local Refinement by replacing each low-value thread with multiple candidate alternatives rather than a single replacement.
+
+Apply Simulated Annealing only in the final stage of optimization to clean up overlaps and escape local minima without disrupting global structure.
+
+Integrate SSIM directly into the optimization score instead of using it only for final evaluation, ensuring structural similarity is preserved from the start.
+
+Implement adaptive thread width, using thinner threads near edges and thicker threads in flat regions to balance detail and smooth shading.
+
+Ensure true linear-space gamma blending, accumulating thread density in linear space before converting back to gamma 2.2 for display, preventing muddy shading.
+
+Optional Enhancement:
+
+A multi-scale optimization approach (128×128 → 256×256 → 512×512) can further improve global structure and fine detail by allowing the system to capture large shapes first and refine details progressively.

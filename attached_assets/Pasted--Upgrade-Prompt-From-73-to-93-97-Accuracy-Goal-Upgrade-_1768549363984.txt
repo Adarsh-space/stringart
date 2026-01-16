@@ -1,0 +1,167 @@
+✅ Upgrade Prompt — From 73% to 93–97% Accuracy
+Goal
+
+Upgrade the current string-art engine from approximately 73% visual accuracy to 93–97% (premium / research level) while keeping the system physically realistic, computationally feasible on Replit, and usable in a real step-by-step crafting app.
+
+Current Limitations
+
+The existing system achieves only ~73% accuracy because it relies mainly on:
+
+Single-pass greedy optimization
+
+Simple thick-line thread model
+
+Basic overlap accumulation
+
+Single-scale (one resolution) optimization
+
+Random or brute-force pin pairing
+
+Basic error metrics
+
+This leads to:
+
+Blurry edges
+
+Muddy overlaps
+
+Poor fine detail
+
+Repeated useless threads
+
+Inefficient pin usage
+
+Missed structural features
+
+Required Upgrades (What Must Be Implemented)
+1) Improve Physical Thread Model (Major Boost)
+
+Replace the current flat “thick line” model with a soft-edge thread profile:
+
+opacity(x) = base_opacity * exp(-d² / sigma²)
+
+
+Where:
+
+d = distance from thread center
+
+sigma = controls softness
+
+Also change overlap rule to:
+
+new_density = old_density + opacity * (1 - old_density)
+
+
+Expected accuracy gain: +3–6%
+
+2) Two-Layer Rendering (Structure + Detail)
+Layer 1 — Structure Layer
+
+280–320 pins
+
+4,000–5,000 threads
+
+Thicker threads (~2.2 px)
+
+Higher opacity (~0.10)
+
+Goal: capture big shapes, outlines, and composition
+
+Layer 2 — Detail Layer
+
+450–600 pins
+
+4,000–5,000 threads
+
+Thinner threads (1.6–1.8 px)
+
+Lower opacity (0.06–0.07)
+
+Goal: refine textures, shading, and small features
+
+Expected gain: +5–8%
+
+3) Multi-Scale Optimization (Key Research Step)
+
+Optimize in stages:
+
+Stage	Resolution	Threads Used	Purpose
+Stage 1	128×128	25%	Global structure
+Stage 2	256×256	35%	Shape refinement
+Stage 3	512×512	40%	Fine detail
+
+Rule:
+👉 Never delete earlier threads — only add refinements.
+
+Expected gain: +3–6%
+
+4) Edge-Aligned Line Selection
+
+Instead of random pin pairing:
+
+Compute Sobel/Canny edge map
+
+Estimate dominant local edge direction
+
+Prefer candidate threads that align with edges
+
+This improves:
+
+Faces
+
+Outlines
+
+Contours
+
+Hair
+
+Object boundaries
+
+Expected gain: +3–5%
+
+5) Hybrid Optimization (Not Just Greedy)
+
+Use four stages:
+
+Stage A — Greedy (Baseline)
+
+Pick best line that reduces error most.
+
+Stage B — Stochastic Sampling
+
+Randomly try lines; sometimes accept slightly worse ones to add variety.
+
+Stage C — Simulated Annealing
+
+Occasionally accept worse moves early to escape bad local solutions.
+
+Stage D — Backtracking Cleanup
+
+Remove the worst 5–10% of threads and replace them.
+
+Expected gain: +3–5%
+
+6) Better Scoring Function
+
+Replace simple pixel error with:
+
+Score =
+  0.40 * SSIM
++ 0.25 * Lab ΔE color error
++ 0.20 * Edge preservation
++ 0.10 * Smoothness penalty
++ 0.05 * Overdraw penalty
+
+
+Use this during optimization, not just at the end.
+
+Expected gain: +2–4%
+
+Expected Final Performance
+
+If all upgrades are implemented:
+
+Before	After
+~73%	93–97% ✅
+
+This is competitive with — and in many cases better than — top commercial string-art apps.

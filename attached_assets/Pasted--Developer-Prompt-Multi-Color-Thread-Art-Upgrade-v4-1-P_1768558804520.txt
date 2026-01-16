@@ -1,0 +1,109 @@
+✅ Developer Prompt – Multi-Color Thread Art Upgrade (v4.1)
+
+Project Goal:
+Upgrade the string art application to support true multi-color thread generation while keeping all v4.0 optimizations (multi-stage, multi-resolution, edge-guided, adaptive pin gaps, opacity control).
+
+1. Current Problem
+
+The app currently collapses color channels into a single density map.
+
+Output threads are all black, even if the input image is colored.
+
+Step-by-step UI does not reflect thread colors.
+
+2. Required Solution
+A. Separate Color Layers
+
+Convert the input image to a suitable color space: RGB or CMY.
+
+Maintain independent density maps per channel:
+
+density_R = np.zeros_like(canvas)
+density_G = np.zeros_like(canvas)
+density_B = np.zeros_like(canvas)
+# Or for CMY:
+density_C = np.zeros_like(canvas)
+density_M = np.zeros_like(canvas)
+density_Y = np.zeros_like(canvas)
+
+B. Per-Color Optimization
+
+Run the entire optimization pipeline per color channel:
+
+Greedy line selection
+
+Local refinement
+
+Simulated annealing (optional)
+
+Backtracking cleanup
+
+Respect multi-stage adaptive settings (Stage 1 → Stage 3) for each color.
+
+Maintain pin gaps, min skip, and opacity rules per stage.
+
+C. Composite Rendering
+
+Combine the per-color layers after optimization:
+
+# Gamma-corrected compositing
+final_density = 1 - (1 - density_R)*(1 - density_G)*(1 - density_B)
+
+
+Each thread must be rendered in its respective color, not black.
+
+D. Step-by-Step UI Update
+
+Highlight current thread’s color in the canvas.
+
+Add automatic pause when switching colors:
+
+"Change thread to RED" → user clicks Continue
+
+
+Keep play/pause/next/prev and speed controls functional.
+
+E. Optional Enhancements
+
+Order colors by darkness or structural importance to reduce overdraw.
+
+Adjust opacity per color channel to preserve subtle gradients.
+
+Apply multi-resolution evaluation per color.
+
+3. Stage Settings (High Preset / 550 pins)
+Stage	Purpose	Pin Gap / Min Pin Skip	Opacity
+Stage 1	Structure	~90	15%
+Stage 2	Medium detail	~40	11%
+Stage 3	Fine detail	2–3	7–8%
+4. Thread & Pin Guidelines (High Preset)
+Property	Value
+Image resolution	1536 × 1536
+Pins	500–600 (default 550)
+Threads	8,000–10,000
+Thread width	1.2 px
+Base opacity	12%
+Multi-stage	Yes
+Adaptive min pin skip	See stage table above
+Target accuracy	93–97%
+5. Expected Result
+
+Threads correctly show red, green, blue, yellow, etc. based on the image.
+
+Step-by-step UI shows color instructions with current pin positions.
+
+Final image achieves ~93–97% perceptual accuracy for the high preset.
+
+Overdraw and opacity are correctly simulated per channel.
+
+6. Implementation Notes
+
+Modify densityImage and overdrawMap to be per color channel.
+
+Loop the entire optimization engine per color channel.
+
+Composite final image using gamma-corrected blending.
+
+Update UI to highlight current thread color and auto-pause for color changes.
+
+Keep all existing v4.0 features (multi-stage, multi-resolution, edge-guided candidate selection, adaptive pin gap, opacity rules).

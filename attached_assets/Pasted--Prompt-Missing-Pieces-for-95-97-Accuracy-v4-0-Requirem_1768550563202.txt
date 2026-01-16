@@ -1,0 +1,127 @@
+✅ Prompt: “Missing Pieces for 95–97% Accuracy (v4.0 Requirements)”
+Context
+
+The current system (Accuracy Optimization v3.0) includes:
+
+Hybrid scoring (SSIM + MSE + Edge + Smoothness + Overdraw)
+
+Sobel-based edge alignment scoring
+
+Overdraw tracking (overdrawMap, densityImage)
+
+Realistic density compositing:
+new_density = old_density + opacity * (1 - old_density)
+
+Multi-candidate local refinement (10+ alternatives per replacement)
+
+Fixed continueGeneration() state rebuilding
+
+With this, the system typically reaches ~88–94% accuracy, often above 90%.
+
+However, it cannot reliably hit 95–97% yet.
+
+What is still MISSING (required to reach 95–97%)
+1) True Multi-Scale Optimization (CRITICAL)
+
+Current system likely optimizes only at one resolution (e.g., 512×512).
+This must change to a three-stage pipeline:
+
+Stage 1 — Global structure
+
+Work at 128×128
+
+Use ~25% of total threads
+
+Focus ONLY on big shapes and composition
+
+Stage 2 — Mid-level refinement
+
+Work at 256×256
+
+Add ~35% more threads
+
+Refine contours and shading
+
+Stage 3 — Fine detail
+
+Work at 512×512
+
+Add final ~40% threads
+
+Add texture, hair, skin detail, and micro-features
+
+Hard rule:
+👉 Never delete earlier threads — only add refinements.
+
+Expected gain: +3–6%
+
+2) Two-Layer Rendering (Structure + Detail)
+
+Replace single-pass rendering with two layers:
+
+Layer A — Structure Layer
+
+~300 pins
+
+4–5k threads
+
+Thicker threads (~2.2 px)
+
+Higher opacity (~0.10)
+
+Goal: perfect outlines, face shape, big shadows
+
+Layer B — Detail Layer
+
+~550 pins
+
+4–5k threads
+
+Thinner threads (~1.7 px)
+
+Lower opacity (~0.06–0.07)
+
+Goal: add texture, gradients, and fine detail
+
+Expected gain: +5–8%
+
+3) Edge-Guided Line PROPOSALS (not just scoring)
+
+Currently edges are used only for scoring.
+They must also guide candidate generation.
+
+New rule:
+
+Compute Sobel edge direction at each region
+
+Prefer pin pairs that align with dominant local edge direction
+
+Bias sampling toward these pairs before greedy selection
+
+This improves:
+
+faces
+
+hair
+
+eyes
+
+object boundaries
+
+Expected gain: +2–4%
+
+4) Multi-Resolution Error Evaluation
+
+When testing a candidate thread, evaluate error at:
+
+Low-res (fast screening)
+
+Mid-res (medium check)
+
+High-res (final decision)
+
+Reject bad lines early to save computation and avoid local traps.
+
+Result if these are added
+Before (v3.0)	After (v4.0)
+88–94%	95–97% ✅
